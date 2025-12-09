@@ -1,5 +1,4 @@
 from torch import nn
-import torch
 
 class Encoder(nn.Module):
     def __init__(self):
@@ -96,7 +95,7 @@ if __name__ == "__main__":
 
     if args.train and args.filename:
         from librosa import load
-        from torch import from_numpy
+        from torch import from_numpy, float32
         audio, _ = load(args.filename, sr=None)
-        audio_tensor = from_numpy(audio)
+        audio_tensor = from_numpy(audio).type(float32)
         train_model(audio_tensor)

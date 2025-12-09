@@ -87,6 +87,8 @@ class AudioPipeline:
         print("Stooping audio playback...")
         self.output_stream.stop()
 
+
+# ATTENTION : N'exécute pas sans écouteurs
 if __name__ == "__main__":
     asc = AudioPipeline(sample_rate=16000)
     polling_thread = threading.Thread(target=asc.poll_buffer)
