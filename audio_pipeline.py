@@ -6,7 +6,7 @@ import time
 
 from utils.ringbuffer import RingBuffer
 from codec import Encoder, Decoder
-from utils.utils import frames_to_audio
+from utils.utils import frames_to_audio, audio_to_frames
 
 class AudioPipeline:
     def __init__(self,
@@ -62,13 +62,13 @@ class AudioPipeline:
 
     def process_audio(self, audio):
         audio_tensor = torch.from_numpy(audio).type(torch.float32)
-        # frames = self.audio_to_frames(audio_tensor, audio.shape[0])
+        audio_frames = audio_to_frames(audio_tensor, audio_length=len(audio_tensor))
         with torch.inference_mode():
-            encoded_audio_frames = self.encoder_model(audio_tensor.unsqueeze(0).unsqueeze(0))
+            encoded_audio_frames = self.encoder_model(audio_frames)
             decoded_audio_frames = self.decoder_model(encoded_audio_frames)
-            decoded_audio = frames_to_audio(decoded_audio_frames, audio.shape[0])
+            decoded_audio = frames_to_audio(decoded_audio_frames, original_length=len(audio))
 
-        self.output_buffer.write(decoded_audio)
+        self.output_buffer.write(decoded_audio.numpy())
 
     def start_listening(self):
         print("Starting Listening...")
