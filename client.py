@@ -2,7 +2,6 @@ import time
 from websockets.sync.client import connect, ClientConnection
 import json
 import socket
-import keyboard
 from audio_pipeline import AudioPipeline
 import random
 import threading
@@ -87,7 +86,7 @@ class Client:
         print("Press 'q' to leave room.")
         try:
             while not stop_event.is_set():
-                if keyboard.is_pressed("q"):
+                if input().strip().lower() == "q":
                     print("Quitting...")
                     stop_event.set()
 

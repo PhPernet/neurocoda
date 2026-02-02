@@ -88,7 +88,6 @@ class Room:
             target_address, last_seen = info
             if sending_address != target_address:
                 try:
-                    print(sending_address, target_address, client_id)
                     self.udp_socket.sendto(data, target_address)
                 except Exception as e:
                     print(e)
@@ -211,6 +210,9 @@ async def handler(websocket: ServerConnection):
                             raise RoomLeaveException("User is not in a room.")
 
                         current_room.leave(client_id)
+                        if len(current_room.participants) == 0:
+                            print(f"Deleting room {current_room.id}")
+                            manager.delete_room(current_room.id)
                         res = json.dumps({"status_code": 200, "body":{}})
                         await websocket.send(res)
                     except Exception as e:
