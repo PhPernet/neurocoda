@@ -3,10 +3,12 @@ import numpy as np
 import torch
 import threading
 import time
+import sys
 
 from utils.ringbuffer import RingBuffer
 from codec import Encoder, Decoder
 from utils.utils import frames_to_audio
+import os
 
 class AudioPipeline:
     def __init__(self,
@@ -19,6 +21,7 @@ class AudioPipeline:
         self.callback_block_size = callback_block_size
         self.output_buffer = RingBuffer(capacity=int(max_output_seconds * self.sample_rate))
         self.input_buffer = RingBuffer(capacity=int(max_input_seconds * self.sample_rate))
+        self.playback_buffer = RingBuffer(capacity=int(max_input_seconds * self.sample_rate))
 
         self.input_stream = sd.InputStream(
             channels=1,
@@ -32,10 +35,18 @@ class AudioPipeline:
             callback=self.output_stream_callback
         )
 
+        if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+            dirname = sys._MEIPASS
+        else:
+            dirname = os.path.dirname(__file__)
+
+        encoder_path = os.path.join(dirname, "model_state/encoder_state")
+        decoder_path = os.path.join(dirname, "model_state/decoder_state")
+
         self.encoder_model = Encoder()
-        self.encoder_model.load_state_dict(torch.load("model_state/encoder_state", weights_only=True))
+        self.encoder_model.load_state_dict(torch.load(encoder_path, weights_only=True))
         self.decoder_model = Decoder()
-        self.decoder_model.load_state_dict(torch.load("model_state/decoder_state", weights_only=True))
+        self.decoder_model.load_state_dict(torch.load(decoder_path, weights_only=True))
 
         self.encoder_model.eval()
         self.decoder_model.eval()
@@ -47,10 +58,10 @@ class AudioPipeline:
         self.input_buffer.write(mono)
 
     def output_stream_callback(self, outdata, frames, time, status):
-        chunk = self.output_buffer.peek_read(frames)
+        chunk = self.playback_buffer.peek_read(frames)
         if len(chunk) < frames:
             chunk = np.pad(chunk, (0, frames - len(chunk)))
-        self.output_buffer.consume(frames)
+        self.playback_buffer.consume(frames)
         outdata[:] = chunk.reshape(-1,1)
 
     def poll_buffer(self, rate_seconds=0.01):
@@ -87,6 +98,16 @@ class AudioPipeline:
         print("Stooping audio playback...")
         self.output_stream.stop()
 
+    def get_output(self, frames):
+        chunk = self.output_buffer.peek_read(frames)
+        if len(chunk) < frames:
+            chunk = np.pad(chunk, (0, frames - len(chunk)))
+        self.output_buffer.consume(frames)
+        return chunk.reshape(-1,1)
+
+    def write_playback_bytes(self, buffer: bytes):
+        data = np.frombuffer(buffer, self.input_buffer.buffer.dtype)
+        self.playback_buffer.write(data)
 
 # ATTENTION : N'exécute pas sans écouteurs
 if __name__ == "__main__":
