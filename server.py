@@ -9,9 +9,22 @@ from websockets.asyncio.server import serve
 from websockets.asyncio.server import ServerConnection
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
+DISCOVERY_PORT = 50000
+SERVER_PORT = 8080
 
 exit_event = threading.Event()
 
+class DiscoveryProtocol(asyncio.DatagramProtocol):
+    def __init__(self):
+        super().__init__()
+        self.transport = None
+
+    def connection_made(self, transport):
+        self.transport = transport
+
+    def datagram_received(self, data, addr):
+        if data == b"DISCOVER_SERVER":
+            self.transport.sendto(b"SERVER_HERE", addr)
 
 class RoomException(Exception):
     def __init__(self, message):
@@ -73,7 +86,7 @@ class Room:
                     if client_id not in self.udp_registry:
                         self.udp_registry[client_id] = (addr, time.time())
                         self.udp_socket.sendto(b"ACK_REG", addr)
-                else:
+                elif len(data) > 0:
                     self.broadcast(addr,data)
             except ConnectionResetError:
                 self.cleanup()
@@ -248,10 +261,18 @@ async def handler(websocket: ServerConnection):
                 print(f"Deleting room {current_room.id}")
                 manager.delete_room(current_room.id)
 
-async def main(port = 8080):
+async def main():
     print("Starting server...")
-    async with serve(handler, "0.0.0.0", port) as server:
-        print(f"Listening on port {port}...")
+
+    loop = asyncio.get_running_loop()
+
+    await loop.create_datagram_endpoint(
+        lambda: DiscoveryProtocol(),
+        local_addr=("0.0.0.0", DISCOVERY_PORT)
+    )
+
+    async with serve(handler, "0.0.0.0", SERVER_PORT) as server:
+        print(f"Listening on port {SERVER_PORT}...")
         await server.serve_forever()
 
 

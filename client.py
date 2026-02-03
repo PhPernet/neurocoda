@@ -10,6 +10,15 @@ import threading
 random.seed(time.time())
 stop_event = threading.Event()
 
+def discover_server(timeout=2):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    s.settimeout(timeout)
+
+    s.sendto(b"DISCOVER_SERVER", ("255.255.255.255", 50000))
+    data, addr = s.recvfrom(1024)
+
+    return addr[0]  # server IP
 
 class Client:
     asc = AudioPipeline(sample_rate=16000)
@@ -17,12 +26,20 @@ class Client:
     def __init__(self):
         self.tcp_websocket: ClientConnection = None
 
-    def receive(self, client: socket.socket):
+        self.udp_socket: socket.socket = socket.socket(socket.AF_INET,  # Internet
+                               socket.SOCK_DGRAM)  # UDP
+        self.udp_socket.settimeout(1.0)
+        port = random.randint(8000, 9000)
+        client_socket_address = ("0.0.0.0", port)
+        self.udp_socket.bind(client_socket_address)
+        print(f"Client udp socket bound to {client_socket_address}")
+
+    def receive(self):
         self.asc.start_playback()
-        client.settimeout(1.0)
+        self.udp_socket.settimeout(1.0)
         while not stop_event.is_set():
             try:
-                data, addr = client.recvfrom(1024)
+                data, addr = self.udp_socket.recvfrom(1024)
                 if data:
                     self.asc.write_playback_bytes(data)
             except socket.timeout:
@@ -33,7 +50,7 @@ class Client:
 
         self.asc.stop_playback()
 
-    def send(self, client: socket.socket, destination: str):
+    def send(self, destination: str):
         polling_thread = threading.Thread(target=self.asc.poll_buffer)
 
         self.asc.start_listening()
@@ -44,7 +61,7 @@ class Client:
             if len(self.asc.output_buffer) * 4 >= bytes_to_send: # each element in the buffer is 4 bytes
                 data = self.asc.get_output(frames=bytes_to_send//4).tobytes()
                 try:
-                    client.sendto(data, destination)
+                    self.udp_socket.sendto(data, destination)
                 except Exception as e:
                     print(e)
                     break
@@ -57,20 +74,12 @@ class Client:
     def chat_handler(self, client_id: str, room_address: tuple):
         stop_event.clear() # Reset the stop flag
 
-        client_socket = socket.socket(socket.AF_INET,  # Internet
-                               socket.SOCK_DGRAM)  # UDP
-        client_socket.settimeout(1.0)
-
         print(f"Starting UDP handshake with {room_address}...")
-        port = random.randint(8000, 9000)
-        client_socket_address = ("0.0.0.0", port)
-        client_socket.bind(client_socket_address)
-        print(f"Client socket bound to {client_socket_address}")
 
         while not stop_event.is_set():
-            client_socket.sendto(f"REG:{client_id}".encode(), room_address)
+            self.udp_socket.sendto(f"REG:{client_id}".encode(), room_address)
             try:
-                data, addr = client_socket.recvfrom(1024)
+                data, addr = self.udp_socket.recvfrom(1024)
                 if data == b"ACK_REG":
                     print("UDP Handshake acknowledged")
                     break
@@ -78,9 +87,9 @@ class Client:
                 print("Retrying UDP registration...")
 
         # Start threads
-        listening_thread = threading.Thread(target=self.receive, args=[client_socket])
+        listening_thread = threading.Thread(target=self.receive)
         listening_thread.start()
-        sending_thread = threading.Thread(target=self.send, args=[client_socket, room_address])
+        sending_thread = threading.Thread(target=self.send, args=[room_address])
         sending_thread.start()
 
         print("Press 'q' to leave room.")
@@ -92,8 +101,6 @@ class Client:
 
                     sending_thread.join()
                     listening_thread.join()
-
-                    client_socket.close()
 
                     if self.tcp_websocket:
                         data = {"action": "leave_room", "payload":{}}
@@ -109,12 +116,11 @@ class Client:
             sending_thread.join()
             listening_thread.join()
 
-            client_socket.close()
-
             raise KeyboardInterrupt
 
     def main(self):
-        uri = "ws://localhost:8080"
+        server_addr = discover_server()
+        uri = f"ws://{server_addr}:8080"
         with connect(uri) as websocket:
             self.tcp_websocket = websocket
             connected = False
@@ -198,6 +204,11 @@ class Client:
                     print(e)
                     print("Please select a valid option.")
 
+        self.udp_socket.close()
+
+
 if __name__ == "__main__":
-    Client().main()
+    client = Client()
+    client.main()
+
 
