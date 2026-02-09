@@ -51,6 +51,8 @@ class AudioPipeline:
         self.encoder_model.eval()
         self.decoder_model.eval()
 
+        self.compression_active = True
+
     def input_stream_callback(self, indata, frames, time, status):
         if status:
             print(status)
@@ -72,19 +74,34 @@ class AudioPipeline:
             time.sleep(rate_seconds)
 
     def process_audio(self, audio):
-        audio_tensor = torch.from_numpy(audio).type(torch.float32)
-        # frames = self.audio_to_frames(audio_tensor, audio.shape[0])
-        with torch.inference_mode():
-            encoded_audio_frames = self.encoder_model(audio_tensor.unsqueeze(0).unsqueeze(0))
-            decoded_audio_frames = self.decoder_model(encoded_audio_frames)
-            decoded_audio = frames_to_audio(decoded_audio_frames, audio.shape[0])
+        if self.compression_active:
+            audio_tensor = torch.from_numpy(audio).type(torch.float32)
+            # frames = self.audio_to_frames(audio_tensor, audio.shape[0])
+            with torch.inference_mode():
+                encoded_audio_frames = self.encoder_model(audio_tensor.unsqueeze(0).unsqueeze(0))
+                decoded_audio_frames = self.decoder_model(encoded_audio_frames)
+                decoded_audio = frames_to_audio(decoded_audio_frames, audio.shape[0])
 
-        self.output_buffer.write(decoded_audio)
+            self.output_buffer.write(decoded_audio)
+        else:
+            self.output_buffer.write(audio)
+
+    def toggle_compression(self):
+        self.set_compression_active(not self.compression_active)
+
+    def set_compression_active(self, flag: bool):
+        self.compression_active = flag
+
+    @property
+    def is_listening(self):
+        return self.input_stream.active
 
     def start_listening(self):
         print("Starting Listening...")
         self.input_stream.start()
-        # input()
+
+        polling_thread = threading.Thread(target=self.poll_buffer)
+        polling_thread.start()
 
     def stop_listening(self):
         print("Stopping Listening...")
@@ -95,13 +112,13 @@ class AudioPipeline:
         self.output_stream.start()
 
     def stop_playback(self):
-        print("Stooping audio playback...")
+        print("Stopping audio playback...")
         self.output_stream.stop()
 
     def get_output(self, frames):
         chunk = self.output_buffer.peek_read(frames)
-        if len(chunk) < frames:
-            chunk = np.pad(chunk, (0, frames - len(chunk)))
+        # if len(chunk) < frames:
+        #     chunk = np.pad(chunk, (0, frames - len(chunk)))
         self.output_buffer.consume(frames)
         return chunk.reshape(-1,1)
 
@@ -112,11 +129,9 @@ class AudioPipeline:
 # ATTENTION : N'exécute pas sans écouteurs
 if __name__ == "__main__":
     asc = AudioPipeline(sample_rate=16000)
-    polling_thread = threading.Thread(target=asc.poll_buffer)
 
     asc.start_listening()
     asc.start_playback()
-    polling_thread.start()
 
     try:
         while True:

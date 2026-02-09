@@ -29,42 +29,56 @@ class Client:
         self.udp_socket: socket.socket = socket.socket(socket.AF_INET,  # Internet
                                socket.SOCK_DGRAM)  # UDP
         self.udp_socket.settimeout(1.0)
+
         port = random.randint(8000, 9000)
         client_socket_address = ("0.0.0.0", port)
         self.udp_socket.bind(client_socket_address)
+
         print(f"Client udp socket bound to {client_socket_address}")
+
+    def leave_current_room(self):
+        if self.tcp_websocket:
+            data = {"action": "leave_room", "payload": {}}
+            self.tcp_websocket.send(json.dumps(data))
+            res = json.loads(self.tcp_websocket.recv(timeout=10))
+            if res["status_code"] != 200:
+                print("uh oh")
 
     def receive(self):
         self.asc.start_playback()
         self.udp_socket.settimeout(1.0)
         while not stop_event.is_set():
             try:
-                data, addr = self.udp_socket.recvfrom(1024)
+                data, addr = self.udp_socket.recvfrom(4096)
                 if data:
                     self.asc.write_playback_bytes(data)
             except socket.timeout:
                 pass
             except Exception as e:
                 print(e)
+                stop_event.set()
+                self.leave_current_room()
                 break
 
         self.asc.stop_playback()
 
     def send(self, destination: str):
-        polling_thread = threading.Thread(target=self.asc.poll_buffer)
-
         self.asc.start_listening()
-        polling_thread.start()
 
-        bytes_to_send = 1024 # this is what the server expects
+        # bytes_to_send = 1024 # this is what the server expects
+        time.sleep(0.1)
+        self.asc.output_buffer.clear()  # Assuming your buffer has a clear method, or just re-init it
+
         while not stop_event.is_set():
-            if len(self.asc.output_buffer) * 4 >= bytes_to_send: # each element in the buffer is 4 bytes
-                data = self.asc.get_output(frames=bytes_to_send//4).tobytes()
-                try:
-                    self.udp_socket.sendto(data, destination)
-                except Exception as e:
-                    print(e)
-                    break
+            # if len(self.asc.output_buffer) * 4 >= bytes_to_send: # each element in the buffer is 4 bytes
+            data = self.asc.get_output(frames=320).tobytes()
+            try:
+                self.udp_socket.sendto(data, destination)
+            except Exception as e:
+                print(e)
+                stop_event.set()
+                self.leave_current_room()
+                break
 
             time.sleep(0.01)
 
@@ -93,21 +107,32 @@ class Client:
         sending_thread.start()
 
         print("Press 'q' to leave room.")
+        print("Press 'm' to toggle microphone.")
+        print("Press 't' to toggle compression model.")
         try:
             while not stop_event.is_set():
-                if input().strip().lower() == "q":
+                inp = input().strip().lower()
+                if inp == "q":
                     print("Quitting...")
                     stop_event.set()
 
                     sending_thread.join()
                     listening_thread.join()
 
-                    if self.tcp_websocket:
-                        data = {"action": "leave_room", "payload":{}}
-                        self.tcp_websocket.send(json.dumps(data))
-                        res = json.loads(self.tcp_websocket.recv(timeout=10))
-                        if res["status_code"] != 200:
-                            print("uh oh")
+                    self.leave_current_room()
+
+                elif inp == "m":
+                    if self.asc.is_listening:
+                        self.asc.stop_listening()
+                    else:
+                        self.asc.start_listening()
+                elif inp == "t":
+                    if self.asc.compression_active:
+                        print("Disabling audio compression.")
+                        self.asc.set_compression_active(False)
+                    else:
+                        print("Enabling audio compression.")
+                        self.asc.set_compression_active(True)
 
                 time.sleep(0.1)
         except KeyboardInterrupt:
