@@ -146,6 +146,7 @@ class Client:
     def main(self):
         server_addr = discover_server()
         uri = f"ws://{server_addr}:8080"
+        print(server_addr)
         with connect(uri) as websocket:
             self.tcp_websocket = websocket
             connected = False
@@ -173,7 +174,7 @@ class Client:
                         res = json.loads(websocket.recv())
                         if res["status_code"] == 200:
                             print(f"Successfully joined room {client_id}")
-                            address = tuple(res["body"]["room_address"])
+                            address = (server_addr, res["body"]["room_address"][1])
                             self.chat_handler(client_id, address)
                         else:
                             print(f"Failed to join room {room_id}")
