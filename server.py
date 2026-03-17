@@ -16,6 +16,8 @@ from websockets.asyncio.server import ServerConnection
 DISCOVERY_PORT = 50000
 SERVER_PORT = 8080
 
+BYTES_PER_MB = 125_000
+
 exit_event = threading.Event()
 
 class TrafficMonitor:
@@ -126,7 +128,7 @@ class Room:
         self.udp_socket.settimeout(1.0)
         while not exit_event.is_set() and self.udp_socket.fileno() != -1:
             try:
-                data, addr = self.udp_socket.recvfrom(4096)
+                data, addr = self.udp_socket.recvfrom(800000)
 
                 sender_id = None
 
@@ -206,7 +208,7 @@ class RoomManager:
 
             server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             port = random.randint(8000,9000)
-            server.bind(("localhost", port))
+            server.bind(("0.0.0.0", port))
             print(f"UDP socket bound to port {port}")
 
             room = Room(room_id, server)
