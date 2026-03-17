@@ -46,7 +46,7 @@ class RingBuffer:
         with self.lock:
             bytes_available = min(num_bytes, self.size)
             if bytes_available == 0:
-                return np.zeros(num_bytes, dtype=np.float32)
+                return np.zeros(0, dtype=np.float32)
             # If the peek doesn't require wrapping around to the beginning of array, return n bytes starting from read_pos
             if self.read_pos + bytes_available <= self.capacity:
                 return self.buffer[self.read_pos : self.read_pos + bytes_available].copy()
@@ -66,3 +66,6 @@ class RingBuffer:
         data = self.peek_read(num_bytes)
         self.consume(num_bytes)
         return data
+
+    def clear(self):
+        self.buffer = np.zeros(self.capacity, dtype=np.float32)
