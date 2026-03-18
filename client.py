@@ -5,20 +5,24 @@ import socket
 from audio_pipeline import AudioPipeline
 import random
 import threading
-
+import queue
 
 random.seed(time.time())
 stop_event = threading.Event()
+
+DISCOVERY_PORT = 50000
+SERVER_PORT = 8080
 
 def discover_server(timeout=2):
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     s.settimeout(timeout)
 
-    s.sendto(b"DISCOVER_SERVER", ("255.255.255.255", 50000))
+    s.sendto(b"DISCOVER_SERVER", ("255.255.255.255", DISCOVERY_PORT))
     data, addr = s.recvfrom(1024)
 
     return addr[0]  # server IP
+
 
 class Client:
     asc = AudioPipeline(sample_rate=16000)
@@ -37,21 +41,28 @@ class Client:
         print(f"Client udp socket bound to {client_socket_address}")
 
     def leave_current_room(self):
-        if self.tcp_websocket:
-            data = {"action": "leave_room", "payload": {}}
-            self.tcp_websocket.send(json.dumps(data))
-            res = json.loads(self.tcp_websocket.recv(timeout=10))
-            if res["status_code"] != 200:
-                print("uh oh")
+        try:
+            if self.tcp_websocket:
+                data = {"action": "leave_room", "payload": {}}
+                self.tcp_websocket.send(json.dumps(data))
+                res = json.loads(self.tcp_websocket.recv(timeout=10))
+                if res["status_code"] != 200:
+                    print("uh oh")
+        except TimeoutError:
+            print("timeout error")
+            pass
+        except Exception:
+            print("other exception")
+            return
 
     def receive(self):
         self.asc.start_playback()
         self.udp_socket.settimeout(1.0)
         while not stop_event.is_set():
             try:
-                data, addr = self.udp_socket.recvfrom(4096)
+                data, addr = self.udp_socket.recvfrom(800000)
                 if data:
-                    self.asc.write_playback_bytes(data)
+                    self.asc.process_incoming_packet(data)
             except socket.timeout:
                 pass
             except Exception as e:
@@ -67,13 +78,20 @@ class Client:
 
         # bytes_to_send = 1024 # this is what the server expects
         time.sleep(0.1)
-        self.asc.output_buffer.clear()  # Assuming your buffer has a clear method, or just re-init it
+        # Clear out any stale packets left in the network queue
+        while not self.asc.network_out_queue.empty():
+            try:
+                self.asc.network_out_queue.get_nowait()
+            except queue.Empty:
+                break
 
         while not stop_event.is_set():
-            # if len(self.asc.output_buffer) * 4 >= bytes_to_send: # each element in the buffer is 4 bytes
-            data = self.asc.get_output(frames=320).tobytes()
             try:
+                # Blocks for up to 0.1 seconds waiting for an exact, whole neural network packet
+                data = self.asc.network_out_queue.get(timeout=0.1)
                 self.udp_socket.sendto(data, destination)
+            except queue.Empty:
+                pass  # Expected timeout if no audio is processed
             except Exception as e:
                 print(e)
                 stop_event.set()
@@ -144,8 +162,12 @@ class Client:
             raise KeyboardInterrupt
 
     def main(self):
-        server_addr = discover_server()
-        uri = f"ws://{server_addr}:8080"
+        try:
+            server_addr = discover_server()
+        except TimeoutError:
+            print("Failed to receive response from server, exiting...")
+            return
+        uri = f"ws://{server_addr}:{SERVER_PORT}"
         print(server_addr)
         with connect(uri) as websocket:
             self.tcp_websocket = websocket
@@ -209,7 +231,7 @@ class Client:
 
                                     if res["status_code"] == 200:
                                         print(f"Successfully joined room {room_id}")
-                                        address = tuple(res["body"]["room_address"])
+                                        address = (server_addr, res["body"]["room_address"][1])
                                         self.chat_handler(client_id, address)
                                         break
                                     else:

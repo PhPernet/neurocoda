@@ -4,6 +4,8 @@ import torch
 import threading
 import time
 import sys
+import queue
+import json
 
 from utils.ringbuffer import RingBuffer
 from codec import Encoder, Decoder
@@ -19,7 +21,9 @@ class AudioPipeline:
 
         self.sample_rate = sample_rate
         self.callback_block_size = callback_block_size
-        self.output_buffer = RingBuffer(capacity=int(max_output_seconds * self.sample_rate))
+
+        self.network_out_queue = queue.Queue(maxsize=50)
+
         self.input_buffer = RingBuffer(capacity=int(max_input_seconds * self.sample_rate))
         self.playback_buffer = RingBuffer(capacity=int(max_input_seconds * self.sample_rate))
 
@@ -76,15 +80,51 @@ class AudioPipeline:
     def process_audio(self, audio):
         if self.compression_active:
             audio_tensor = torch.from_numpy(audio).type(torch.float32)
-            # frames = self.audio_to_frames(audio_tensor, audio.shape[0])
             with torch.inference_mode():
                 encoded_audio_frames = self.encoder_model(audio_tensor.unsqueeze(0).unsqueeze(0))
-                decoded_audio_frames = self.decoder_model(encoded_audio_frames)
-                decoded_audio = frames_to_audio(decoded_audio_frames, audio.shape[0])
 
-            self.output_buffer.write(decoded_audio)
+            tensor = encoded_audio_frames.detach().cpu().contiguous()
+            raw_bytes = memoryview(tensor.numpy().astype(np.float32)).tobytes()
+            header = json.dumps({"shape": tensor.shape}).encode()
+
+            packet = b'C' + len(header).to_bytes(4, "little") + header  + raw_bytes
         else:
-            self.output_buffer.write(audio)
+            packet = b'R' + audio.tobytes()
+
+        self.network_out_queue.put_nowait(packet)
+
+    def process_incoming_packet(self, packet: bytes):
+        if not packet:
+            return
+
+        packet_type = packet[0:1]
+        payload = packet[1:]
+
+        if packet_type == b'C':
+            header_len = int.from_bytes(payload[:4], "little")
+            header_b = payload[4:4+header_len]
+
+            header = json.loads(header_b)
+            shape = header["shape"]
+
+            body = payload[4+header_len:]
+
+            # Reconstruct the tensor
+            buff = np.frombuffer(body, dtype=np.float32)
+
+            encoded_tensor = torch.from_numpy(buff).reshape(shape)
+
+            # Run the decoding step ONLY on the receiver
+            with torch.inference_mode():
+                decoded_audio_frames = self.decoder_model(encoded_tensor)
+                decoded_audio = frames_to_audio(decoded_audio_frames, self.callback_block_size)
+
+            self.playback_buffer.write(decoded_audio)
+
+        elif packet_type == b'R':
+            # Handle uncompressed audio bypass
+            data = np.frombuffer(payload, dtype=self.input_buffer.buffer.dtype)
+            self.playback_buffer.write(data)
 
     def toggle_compression(self):
         self.set_compression_active(not self.compression_active)
@@ -114,13 +154,6 @@ class AudioPipeline:
     def stop_playback(self):
         print("Stopping audio playback...")
         self.output_stream.stop()
-
-    def get_output(self, frames):
-        chunk = self.output_buffer.peek_read(frames)
-        # if len(chunk) < frames:
-        #     chunk = np.pad(chunk, (0, frames - len(chunk)))
-        self.output_buffer.consume(frames)
-        return chunk.reshape(-1,1)
 
     def write_playback_bytes(self, buffer: bytes):
         data = np.frombuffer(buffer, self.input_buffer.buffer.dtype)
