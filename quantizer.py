@@ -20,7 +20,7 @@ class Quantizer:
 
         for k in range(n_codebook):
             print("création du codebook n°", k+1)
-            kmeans = KMeans(n_clusters = n_clusters-1, random_state = 42, max_iter=200)
+            kmeans = KMeans(n_clusters = n_clusters-1, random_state = 42, max_iter=500)
             kmeans.fit(r)
             centers = kmeans.cluster_centers_
 
@@ -41,7 +41,7 @@ class Quantizer:
             
             ecart_type = np.expand_dims(np.array(ecart_type), axis=1)
             quantizer.ecart_type.append(ecart_type)
-            r /= quantizer.ecart_type[k][labels]
+            r /= quantizer.ecart_type[k][labels] + 1e-6
             quantizer.codebooks.append(centers)
 
         quantizer.codebooks = np.array(quantizer.codebooks)
@@ -73,13 +73,13 @@ class Quantizer:
             res.append(near_cluster)
             if k != self.n_codebook-1:
                 r -= self.codebooks[k][near_cluster]
-                r /= self.ecart_type[k][near_cluster]
+                r /= self.ecart_type[k][near_cluster] + 1e-6
         res = np.array(res)
         return res
     
     def deQuantize(self, encoded_quantized):
         r = copy.deepcopy(self.codebooks[-1][encoded_quantized[-1]])
         for k in range(self.n_codebook-2, -1, -1):
-            r *= self.ecart_type[k][encoded_quantized[k]]
+            r *= self.ecart_type[k][encoded_quantized[k]] + 1e-6
             r += self.codebooks[k][encoded_quantized[k]]
         return r
