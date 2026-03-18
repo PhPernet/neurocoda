@@ -22,22 +22,24 @@ class Quantizer:
             print("création du codebook n°", k+1)
             kmeans = KMeans(n_clusters = n_clusters-1, random_state = 42, max_iter=200)
             kmeans.fit(r)
-            centers = np.vstack((kmeans.cluster_centers_, np.zeros(r.shape[1])))
+            centers = kmeans.cluster_centers_
 
-            r2 = np.sum(r**2, axis=1, keepdims=True)           
-            c2 = np.sum(centers**2, axis=1).reshape(1, -1)
-
-            rc = r @ centers.T                        
-
-            dist = r2 + c2 - 2 * rc
-            labels = np.argmin(dist, axis = 1)
+            labels = kmeans.labels_
 
             r -= centers[labels]
+
             #Changer l'ecart-type
-            ecart_type = np.expand_dims(np.array([r[labels==k].std() for k in range(n_clusters)]), axis=1)
-            ecart_type[ecart_type==0]=np.nan
-            ecart_mean = np.nanmean(ecart_type)
-            ecart_type[np.isnan(ecart_type)] = ecart_mean
+            ecart_type = []
+            global_std = r.std() 
+
+            for i in range(n_clusters):
+                cluster_r = r[labels==i]
+                if len(cluster_r) <= 1:
+                    ecart_type.append(global_std)
+                else:
+                    ecart_type.append(cluster_r.std())
+            
+            ecart_type = np.expand_dims(np.array(ecart_type), axis=1)
             quantizer.ecart_type.append(ecart_type)
             r /= quantizer.ecart_type[k][labels]
             quantizer.codebooks.append(centers)
