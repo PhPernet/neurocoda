@@ -8,7 +8,7 @@ import queue
 import json
 
 from utils.ringbuffer import RingBuffer
-from codec import Encoder, Decoder
+from model import Encoder, Decoder, VectorQuantizer
 from utils.utils import frames_to_audio
 import os
 
@@ -46,14 +46,18 @@ class AudioPipeline:
 
         encoder_path = os.path.join(dirname, "model_state/encoder_state")
         decoder_path = os.path.join(dirname, "model_state/decoder_state")
+        vq_path = os.path.join(dirname, "model_state/vq_state")
 
         self.encoder_model = Encoder()
         self.encoder_model.load_state_dict(torch.load(encoder_path, weights_only=True))
         self.decoder_model = Decoder()
         self.decoder_model.load_state_dict(torch.load(decoder_path, weights_only=True))
+        self.vq_model = VectorQuantizer(num_embeddings=256, embedding_dim=6)
+        self.vq_model.load_state_dict(torch.load(vq_path, weights_only=True))
 
         self.encoder_model.eval()
         self.decoder_model.eval()
+        self.vq_model.eval()
 
         self.compression_active = True
 
@@ -82,8 +86,9 @@ class AudioPipeline:
             audio_tensor = torch.from_numpy(audio).type(torch.float32)
             with torch.inference_mode():
                 encoded_audio_frames = self.encoder_model(audio_tensor.unsqueeze(0).unsqueeze(0))
+                quantized_frames, vq_loss = self.vq_model(encoded_audio_frames)
 
-            tensor = encoded_audio_frames.detach().cpu().contiguous()
+            tensor = quantized_frames.detach().cpu().contiguous()
             raw_bytes = memoryview(tensor.numpy().astype(np.float32)).tobytes()
             header = json.dumps({"shape": tensor.shape}).encode()
 
