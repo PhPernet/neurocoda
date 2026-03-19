@@ -79,9 +79,9 @@ class AudioPipeline:
             with torch.inference_mode():
                 quantized_frames = self.model.encode_to_indices(audio_tensor.unsqueeze(0).unsqueeze(0))
 
-            tensor = quantized_frames.detach().cpu().contiguous()
-            raw_bytes = memoryview(tensor.numpy().astype(np.float32)).tobytes()
-            header = json.dumps({"shape": tensor.shape}).encode()
+            tensor_uint8 = quantized_frames.detach().cpu().to(torch.uint8).contiguous()
+            raw_bytes = tensor_uint8.numpy().tobytes()
+            header = json.dumps({"shape": tensor_uint8.shape}).encode()
 
             packet = b'C' + len(header).to_bytes(4, "little") + header  + raw_bytes
         else:
@@ -105,10 +105,11 @@ class AudioPipeline:
 
             body = payload[4+header_len:]
 
-            # Reconstruct the tensor
-            buff = np.frombuffer(body, dtype=np.float32)
+            # Reconstruct the tensor en précisant le type uint8
+            buff = np.frombuffer(body, dtype=np.uint8)
 
-            encoded_tensor = torch.from_numpy(buff).reshape(shape)
+            # Passage en torch.long obligatoire pour la couche nn.Embedding du décodeur
+            encoded_tensor = torch.from_numpy(buff).reshape(shape).to(torch.long)
 
             # Run the decoding step ONLY on the receiver
             with torch.inference_mode():
@@ -116,11 +117,6 @@ class AudioPipeline:
                 decoded_audio = frames_to_audio(decoded_audio_frames, self.callback_block_size)
 
             self.playback_buffer.write(decoded_audio)
-
-        elif packet_type == b'R':
-            # Handle uncompressed audio bypass
-            data = np.frombuffer(payload, dtype=self.input_buffer.buffer.dtype)
-            self.playback_buffer.write(data)
 
     def toggle_compression(self):
         self.set_compression_active(not self.compression_active)

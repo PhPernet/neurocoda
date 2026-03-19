@@ -302,7 +302,7 @@ async def handler(websocket: ServerConnection):
                         res = json.dumps({"status_code": 400, "reason": e})
                         await websocket.send(res)
                 else:
-                    msg = f"Action {data["action"]} not implemented."
+                    msg = f'Action {data["action"]} not implemented.'
                     print(msg)
                     res = json.dumps({"status_code": 400, "reason": msg})
                     await websocket.send(res)
