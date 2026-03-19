@@ -8,7 +8,7 @@ import queue
 import json
 
 from utils.ringbuffer import RingBuffer
-from model import Encoder, Decoder, VectorQuantizer
+from model import VQAutoEncoder
 from utils.utils import frames_to_audio
 import os
 
@@ -44,20 +44,12 @@ class AudioPipeline:
         else:
             dirname = os.path.dirname(__file__)
 
-        encoder_path = os.path.join(dirname, "model_state/encoder_state")
-        decoder_path = os.path.join(dirname, "model_state/decoder_state")
-        vq_path = os.path.join(dirname, "model_state/vq_state")
+        model_path = os.path.join(dirname, "model_state/vq_model_weights.pth")
 
-        self.encoder_model = Encoder()
-        self.encoder_model.load_state_dict(torch.load(encoder_path, weights_only=True))
-        self.decoder_model = Decoder()
-        self.decoder_model.load_state_dict(torch.load(decoder_path, weights_only=True))
-        self.vq_model = VectorQuantizer(num_embeddings=256, embedding_dim=6)
-        self.vq_model.load_state_dict(torch.load(vq_path, weights_only=True))
+        self.model = VQAutoEncoder()
+        self.model.load_state_dict(torch.load(model_path, weights_only=True))
 
-        self.encoder_model.eval()
-        self.decoder_model.eval()
-        self.vq_model.eval()
+        self.model.eval()
 
         self.compression_active = True
 
@@ -85,8 +77,7 @@ class AudioPipeline:
         if self.compression_active:
             audio_tensor = torch.from_numpy(audio).type(torch.float32)
             with torch.inference_mode():
-                encoded_audio_frames = self.encoder_model(audio_tensor.unsqueeze(0).unsqueeze(0))
-                quantized_frames, vq_loss = self.vq_model(encoded_audio_frames)
+                quantized_frames = self.model.encode_to_indices(audio_tensor.unsqueeze(0).unsqueeze(0))
 
             tensor = quantized_frames.detach().cpu().contiguous()
             raw_bytes = memoryview(tensor.numpy().astype(np.float32)).tobytes()
@@ -121,7 +112,7 @@ class AudioPipeline:
 
             # Run the decoding step ONLY on the receiver
             with torch.inference_mode():
-                decoded_audio_frames = self.decoder_model(encoded_tensor)
+                decoded_audio_frames = self.model.decode_from_indices(encoded_tensor)
                 decoded_audio = frames_to_audio(decoded_audio_frames, self.callback_block_size)
 
             self.playback_buffer.write(decoded_audio)
