@@ -5,6 +5,7 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 import numpy as np
+import librosa
 
 
 def mel_spectrogram(
@@ -136,8 +137,43 @@ def audio_to_frames(audio, audio_length, frame_size=1024, hop_length=512):
     return frames
 
 
+def get_dataset(dir="audios", batch_size=32):
+    # Load test audio with a sample rate of 44khz
+    SAMPLE_RATE = 44100
+    audios = []
+    deb_audio = 2
+    nb_audios = 30
+    compteur = 0
+
+    for file in os.listdir(dir):
+        compteur += 1
+
+        if compteur <= deb_audio:
+            continue
+        audio, sr = librosa.load(f"{dir}/{file}", sr=SAMPLE_RATE)
+        audios.append(audio)
+
+        if compteur >= nb_audios + deb_audio:
+            break
+    
+    audio_tensor = []
+    for audio in audios:
+        audio_tensor.append(tf.convert_to_tensor(audio, dtype=tf.float32))
+    frame_size = 1024
+    hop_length = 512
+
+    frames = []
+    for tensor in audio_tensor:
+        frames.append(audio_to_frames(tensor, len(tensor), frame_size, hop_length))
+    frames = tf.concat(frames, axis=0)
+    dataset = tf.data.Dataset.from_tensor_slices(frames)
+    dataset = dataset.map(lambda x: (x, x))  # autoencoder: input == target
+    dataset = dataset.batch(batch_size).shuffle(buffer_size=1000)
+    return dataset
+
+
 def train_model(
-    audio,
+    dataset,
     frame_size: int = 1024,
     hop_length: int = 512,
     *,
@@ -145,10 +181,6 @@ def train_model(
     n_mels: int = 80,
 ):
     autoencoder, encoder, decoder = build_autoencoder(frame_size)
-
-    # Prepare frames: shape (num_frames, frame_size) -> (num_frames, frame_size, 1)
-    frames = audio_to_frames(audio, len(audio), frame_size, hop_length)
-    frames = frames[..., np.newaxis].astype(np.float32)
 
     mel_loss = make_mel_loss(
         sample_rate=sample_rate,
@@ -159,7 +191,7 @@ def train_model(
     )
 
     autoencoder.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=0.01),
+        optimizer=keras.optimizers.Adam(learning_rate=1e-4),
         loss=mel_loss,
     )
 
@@ -167,10 +199,8 @@ def train_model(
 
     print("Beginning Training...")
     autoencoder.fit(
-        frames, frames,  # input = target (autoencoder)
-        batch_size=32,
-        epochs=25,
-        shuffle=True,
+        dataset,
+        epochs=25
     )
 
     encoder.save_weights("model_state/encoder_state.weights.h5")
@@ -184,15 +214,13 @@ if __name__ == "__main__":
         prog='code',
         description='Trains Encoder/Decoder model on a sample of audio')
 
-    parser.add_argument('filename')  # positional argument
+    parser.add_argument('dir')  # positional argument
     parser.add_argument('-t', '--train',
                         action='store_true')  # on/off flag
 
     args = parser.parse_args()
-    print(args.filename, args.train)
+    print(args.dir, args.train)
 
-    if args.train and args.filename:
-        from librosa import load
-        audio, sr = load(args.filename, sr=None)
-        audio = audio.astype(np.float32)
-        train_model(audio, sample_rate=int(sr))
+    if args.train and args.dir:
+        dataset = get_dataset(dir=args.dir)
+        train_model(dataset)
