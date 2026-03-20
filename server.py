@@ -128,7 +128,7 @@ class Room:
         self.udp_socket.settimeout(1.0)
         while not exit_event.is_set() and self.udp_socket.fileno() != -1:
             try:
-                data, addr = self.udp_socket.recvfrom(800000)
+                data, addr = self.udp_socket.recvfrom(8192)
 
                 sender_id = None
 

@@ -6,12 +6,21 @@ from audio_pipeline import AudioPipeline
 import random
 import threading
 import queue
+import inspect
 
 random.seed(time.time())
 stop_event = threading.Event()
 
 DISCOVERY_PORT = 50000
 SERVER_PORT = 8080
+
+def debug_print(*args):
+    # Get the previous frame in the stack (where debug_print was called)
+    frame = inspect.currentframe().f_back
+    line_number = frame.f_lineno
+    filename = frame.f_code.co_filename
+
+    print(f"[{filename}:{line_number}]", *args)
 
 def discover_server(timeout=2):
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -60,13 +69,13 @@ class Client:
         self.udp_socket.settimeout(1.0)
         while not stop_event.is_set():
             try:
-                data, addr = self.udp_socket.recvfrom(800000)
+                data, addr = self.udp_socket.recvfrom(8192)
                 if data:
                     self.asc.process_incoming_packet(data)
             except socket.timeout:
                 pass
             except Exception as e:
-                print(e)
+                debug_print(e)
                 stop_event.set()
                 self.leave_current_room()
                 break
@@ -93,7 +102,7 @@ class Client:
             except queue.Empty:
                 pass  # Expected timeout if no audio is processed
             except Exception as e:
-                print(e)
+                debug_print(e)
                 stop_event.set()
                 self.leave_current_room()
                 break
@@ -168,7 +177,6 @@ class Client:
             print("Failed to receive response from server, exiting...")
             return
         uri = f"ws://{server_addr}:{SERVER_PORT}"
-        print(server_addr)
         with connect(uri) as websocket:
             self.tcp_websocket = websocket
             connected = False
@@ -225,7 +233,6 @@ class Client:
 
                                     room_id = available_rooms[choice - 1]
                                     data = {"action": "join_room", "payload": {"room_id": room_id}}
-                                    print(data)
                                     websocket.send(json.dumps(data))
                                     res = json.loads(websocket.recv())
 
@@ -239,7 +246,7 @@ class Client:
                                         pass
 
                                 except Exception as e:
-                                    print(e)
+                                    debug_print(e)
                                     print("Please select a valid option.")
                     elif choice == 3:
                         websocket.close()
@@ -249,7 +256,7 @@ class Client:
                     websocket.close()
                     break
                 except Exception as e:
-                    print(e)
+                    debug_print(e)
                     print("Please select a valid option.")
 
         self.udp_socket.close()

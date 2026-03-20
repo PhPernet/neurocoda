@@ -16,8 +16,7 @@ class AudioPipeline:
     def __init__(self,
                  sample_rate=16000, # Common for speech models
                  callback_block_size=1024, # Frames per chunk
-                 max_input_seconds=2.0, # Capacity of input buffer (seconds)
-                 max_output_seconds=2.0): # Capacity of output buffer (seconds)
+                 max_input_seconds=2.0): # Capacity of input buffer (seconds)
 
         self.sample_rate = sample_rate
         self.callback_block_size = callback_block_size
@@ -26,6 +25,8 @@ class AudioPipeline:
 
         self.input_buffer = RingBuffer(capacity=int(max_input_seconds * self.sample_rate))
         self.playback_buffer = RingBuffer(capacity=int(max_input_seconds * self.sample_rate))
+
+        self.data_ready = threading.Event()
 
         self.input_stream = sd.InputStream(
             channels=1,
@@ -36,9 +37,11 @@ class AudioPipeline:
         self.output_stream = sd.OutputStream(
             channels=1,
             samplerate=self.sample_rate,
+            blocksize=self.callback_block_size,
             callback=self.output_stream_callback
         )
 
+        # Si jamais on veut utiliser le client en tant qu'executable
         if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
             dirname = sys._MEIPASS
         else:
@@ -58,6 +61,7 @@ class AudioPipeline:
             print(status)
         mono = np.mean(indata, axis=1) # convert audio to mono
         self.input_buffer.write(mono)
+        self.data_ready.set()
 
     def output_stream_callback(self, outdata, frames, time, status):
         chunk = self.playback_buffer.peek_read(frames)
@@ -66,12 +70,16 @@ class AudioPipeline:
         self.playback_buffer.consume(frames)
         outdata[:] = chunk.reshape(-1,1)
 
-    def poll_buffer(self, rate_seconds=0.01):
+    def poll_buffer(self):
         while self.input_stream.active:
-            if len(self.input_buffer) > self.callback_block_size:
-                data = self.input_buffer.read(self.callback_block_size)
-                self.process_audio(data)
-            time.sleep(rate_seconds)
+            # Blocks until the data_ready flag is set
+            if self.data_ready.wait(timeout=1):
+                self.data_ready.clear()
+
+                # Process the data as long as there is enough in the input buffer
+                while len(self.input_buffer) >= self.callback_block_size:
+                    data = self.input_buffer.read(self.callback_block_size)
+                    self.process_audio(data)
 
     def process_audio(self, audio):
         if self.compression_active:
@@ -87,7 +95,10 @@ class AudioPipeline:
         else:
             packet = b'R' + audio.tobytes()
 
-        self.network_out_queue.put_nowait(packet)
+        try:
+            self.network_out_queue.put_nowait(packet)
+        except queue.Full:
+            pass
 
     def process_incoming_packet(self, packet: bytes):
         if not packet:
@@ -117,6 +128,8 @@ class AudioPipeline:
                 decoded_audio = frames_to_audio(decoded_audio_frames, self.callback_block_size)
 
             self.playback_buffer.write(decoded_audio)
+        else:
+            self.write_playback_bytes(payload)
 
     def toggle_compression(self):
         self.set_compression_active(not self.compression_active)
@@ -148,7 +161,7 @@ class AudioPipeline:
         self.output_stream.stop()
 
     def write_playback_bytes(self, buffer: bytes):
-        data = np.frombuffer(buffer, self.input_buffer.buffer.dtype)
+        data = np.frombuffer(buffer, dtype=np.float32)
         self.playback_buffer.write(data)
 
 # ATTENTION : N'exécute pas sans écouteurs
